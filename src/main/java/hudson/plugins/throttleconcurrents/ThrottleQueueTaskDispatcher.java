@@ -3,14 +3,8 @@ package hudson.plugins.throttleconcurrents;
 import hudson.Extension;
 import hudson.matrix.MatrixConfiguration;
 import hudson.matrix.MatrixProject;
-import hudson.model.ParameterValue;
-import hudson.model.Computer;
-import hudson.model.Executor;
-import hudson.model.Job;
-import hudson.model.Node;
-import hudson.model.Queue;
+import hudson.model.*;
 import hudson.model.Queue.Task;
-import hudson.model.Run;
 import hudson.model.queue.WorkUnit;
 import hudson.model.labels.LabelAtom;
 import hudson.model.queue.CauseOfBlockage;
@@ -18,8 +12,6 @@ import hudson.model.queue.QueueTaskDispatcher;
 import hudson.plugins.throttleconcurrents.pipeline.ThrottleStep;
 import hudson.security.ACL;
 import hudson.security.NotSerilizableSecurityContext;
-import hudson.model.Action;
-import hudson.model.ParametersAction;
 import hudson.model.queue.SubTask;
 
 import java.io.IOException;
@@ -30,6 +22,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 
@@ -44,7 +37,10 @@ import org.jenkinsci.plugins.workflow.graph.StepNode;
 import org.jenkinsci.plugins.workflow.graphanalysis.LinearBlockHoppingScanner;
 import org.jenkinsci.plugins.workflow.steps.StepDescriptor;
 import org.jenkinsci.plugins.workflow.support.concurrent.Timeout;
+import org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution;
 import org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution.PlaceholderTask;
+
+import static java.util.stream.Collectors.toList;
 
 @Extension
 public class ThrottleQueueTaskDispatcher extends QueueTaskDispatcher {
@@ -334,26 +330,21 @@ public class ThrottleQueueTaskDispatcher extends QueueTaskDispatcher {
             itemParams = doFilterParams(paramsToCompare, itemParams);
         }
 
-        if (computer != null) {
-            for (Executor exec : computer.getExecutors()) {
-                // TODO: refactor into a nameEquals helper method
-                final Queue.Executable currentExecutable = exec.getCurrentExecutable();
-                final SubTask parentTask = currentExecutable != null ? currentExecutable.getParent() : null;
-                if (currentExecutable != null &&
-                        parentTask.getOwnerTask().getName().equals(item.task.getName())) {
-                    List<ParameterValue> executingUnitParams = getParametersFromWorkUnit(exec.getCurrentWorkUnit());
-                    executingUnitParams = doFilterParams(paramsToCompare, executingUnitParams);
+        List<Job> runningJobs = Jenkins.getInstance().getAllItems(Job.class).stream()
+                .filter(job -> job.isBuilding() && job.getDisplayName().equals(item.task.getName()))
+                .collect(Collectors.toList());
 
-                    if (executingUnitParams.containsAll(itemParams)) {
-                        LOGGER.log(Level.FINE, "build (" + exec.getCurrentWorkUnit() +
-                                ") with identical parameters (" +
-                                executingUnitParams + ") is already running.");
-                        return true;
-                    }
+        for (Job j : runningJobs) {
+            List<Run> runs = j.getBuilds();
+
+            for (Run r : runs) {
+                if (r.isBuilding() && r.getAction(ParametersAction.class).getParameters().containsAll(itemParams)) {
+                    LOGGER.log(Level.FINE, "build with identical parameters " +
+                            itemParams.toString() + " is already running.");
+                    return true;
                 }
             }
         }
-
         return false;
     }
 
@@ -380,7 +371,6 @@ public class ThrottleQueueTaskDispatcher extends QueueTaskDispatcher {
 
     public List<ParameterValue> getParametersFromWorkUnit(WorkUnit unit) {
         List<ParameterValue> paramsList = new ArrayList<ParameterValue>();
-
         if (unit != null && unit.context != null && unit.context.actions != null) {
             List<Action> actions = unit.context.actions;
             for (Action action : actions) {

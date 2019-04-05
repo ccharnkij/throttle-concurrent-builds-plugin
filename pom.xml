@@ -45,10 +45,9 @@ THE SOFTWARE.
     
   <properties>
     <jenkins.version>1.642.3</jenkins.version>
-    <java.level>6</java.level>
+    <java.level>8</java.level>
     <!--TODO: do not fail on errors-->
     <findbugs.failOnError>false</findbugs.failOnError>
-    <java.level>7</java.level>
   </properties>
 
   <developers>
